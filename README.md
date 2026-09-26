@@ -1,111 +1,116 @@
 # Outline plugin
 
-BitSentry code-plugin artifact for Desktop CE/Pro and Dashboard runbook actions.
-It has no runtime dependencies; `dist/plugin.js` exports the SDK plugin contract.
-The Desktop build compiles it after the SDK declarations. Desktop and
-Dashboard supply their own auth for each invocation; the plugin stores no secrets.
+Search/read knowledge and create, update, or delete Markdown documents through
+the BitSentry SDK in Desktop or Dashboard, or the standalone debug CLI.
 
-## Standalone development
+## Build and SDK contract
 
-Requires Node.js 22.12+ and pnpm 10.32.1.
-
-```sh
-pnpm install --frozen-lockfile
-pnpm run build
-pnpm run typecheck
-pnpm run lint
-```
-
-The build emits `dist/plugin.js` and TypeScript declarations. The SDK is a
-build-time dependency; credentials are supplied by the invoking BitSentry host.
-Source publication does not publish a plugin artifact or update the plugin index.
-
-## BitSentry workspace installation
-
-When integrated into the BitSentry monorepo, from its root, run `pnpm run build`. To rebuild Desktop packages and
-regenerate the plugin artifacts/index:
+Requires Node.js 22.12+ and pnpm 10.32.1. This repository owns its dependencies
+and `pnpm-lock.yaml`, including when checked out under Desktop CE.
 
 ```sh
-pnpm run desktop:ce:build:packages
-bitsentry plugin install outline --index-url /absolute/path/to/apps/desktop-ce/build/plugins/index.yaml
+pnpm --ignore-workspace install --frozen-lockfile
+pnpm --ignore-workspace run build
+pnpm --ignore-workspace run typecheck
+pnpm --ignore-workspace run lint
 ```
 
-The Desktop build generates `build/plugins/outline.plugin.js` and `build/plugins/index.yaml` for local installation before publication. The public
-first-party index has **not** been updated. Publishing requires uploading the
-built artifact to an approved first-party location and adding its index entry.
+The build validates the plugin against the published SDK schema, checks unique
+action/field IDs, CRUD coverage, write labels, and matching versions. It produces
+`build/outline.plugin.js`, `build/index.yaml`, `build/descriptor.json`, and
+`build/checksums.sha256`. CI uploads that directory as the `plugin` artifact.
 
-For Dashboard, deploy the generated `build/plugins` directory together,
-set `BITSENTRY_PLUGIN_INDEX_URL` to the absolute deployed index path, and include
-`outline` in `BITSENTRY_CLOUD_PLUGIN_ALLOWLIST`. When using other plugins, merge
-their existing entries into that index and retain their allowlist names. The
-worker's existing `CloudPluginRuntime` installs and executes the same artifact;
-use `pluginId: "outline"`, `pluginActionId` from the table below, and the
-`pluginAuth`/`pluginInput` JSON fields in plugin runbook steps. Supply credentials
-through the host's secret handling rather than committing them to runbooks. This is
-an action plugin, not a continuous ingestion connector or a new Dashboard setup UI.
+The SDK contract is `actions[]` with declared fields, `riskLevel`, and `execute`.
+Both plugins use `create_*`, `get_*`, `update_*`, and `delete_*` action IDs
+for CRUD, plus list/search and provider-specific actions. The SDK does not
+require every integration to expose CRUD methods. Host results use
+`pluginId`, `actionId`, `ok`, `status`, `summary`, and optional `data`. Provider
+payloads stay inside `data`. No SDK change is required. A type-only compatibility
+declaration accepts optional cancellation/deadlines from newer hosts while
+remaining compatible with the published SDK 0.1.0.
 
-## Credentials and actions
+## Install in BitSentry
 
-Set `auth.accessToken` to an Outline API key (a secret field). `auth.apiBase`
-defaults to `https://app.getoutline.com/api`. For self-hosting, set the exact HTTPS
-API URL, including `/api`, in both `auth.apiBase` and the host environment's
-comma-separated `OUTLINE_ALLOWED_API_BASES`. For Desktop this environment belongs
-to the Desktop/CLI process; for Dashboard it belongs to the worker. Only an
-administrator should allowlist destinations. Redirects are rejected.
+```sh
+bitsentry plugin install outline --index-url /absolute/path/to/this-repository/build/index.yaml
+bitsentry plugin info outline --json
+```
 
-| Action ID | Inputs | Risk |
+Desktop CE's build orchestrates an isolated frozen install/build for this
+submodule; it does not add these dependencies to CE's lockfile. The combined
+Desktop artifact index remains at `apps/desktop-ce/build/plugins/index.yaml`.
+Dashboard can use that index via `BITSENTRY_PLUGIN_INDEX_URL`; include `outline`
+in an explicitly configured `BITSENTRY_CLOUD_PLUGIN_ALLOWLIST`.
+Desktop and Dashboard resolve their own credentials. No Prisma migration is
+needed to install or execute this plugin. Dashboard webhook receivers are a
+separate backend feature. Building does not update the public plugin catalog.
+
+## Debug without the Desktop app
+
+After building, list action IDs, fields, and defaults without connecting:
+
+```sh
+pnpm --ignore-workspace run debug
+```
+
+Create a credentials file named `auth.local.json`, restrict its permissions, and
+set `BITSENTRY_PLUGIN_AUTH_FILE` to its absolute path. `*.local.json` and `.env*`
+are ignored by Git. Never commit real credentials. The debug command reads auth
+from the file; it does not put credentials in command-line arguments.
+
+Auth file shape:
+
+```json
+{"apiBase":"https://outline.example.com/api","accessToken":"YOUR_API_KEY"}
+```
+
+`apiBase` defaults to `https://app.getoutline.com/api`. For self-hosting, set
+`OUTLINE_ALLOWED_API_BASES` on the invoking host to the exact HTTPS API URL,
+including `/api` (comma-separated for multiple instances). Redirects are rejected.
+
+```sh
+export OUTLINE_ALLOWED_API_BASES=https://outline.example.com/api
+export BITSENTRY_PLUGIN_AUTH_FILE=/absolute/path/to/auth.local.json
+pnpm --ignore-workspace run debug --action list_collections --show-data
+pnpm --ignore-workspace run debug --action search_documents --input search.local.json --show-data
+```
+
+Example `search.local.json`: `{"query":"database restart","limit":10}`.
+Use `--show-data` to include provider results; otherwise output contains only the
+SDK summary/status. Results may contain internal document content. Writes require
+`--confirm-write` in this debug CLI, in addition to action-specific confirmations.
+
+## Actions
+
+| Action | Main inputs | Risk |
 | --- | --- | --- |
-| `list_collections` | `limit`, `offset` | read |
+| `list_collections` | optional `limit`, `offset` | read |
 | `list_documents` | optional `collectionId`, `limit`, `offset` | read |
 | `search_documents` | `query`, optional `collectionId`, `limit`, `offset` | read |
 | `get_document` | `id` | read |
-| `update_document` | `id`; optional `title`, `text`, `publish`, `editMode`, `lastRevision` | write |
+| `create_document` | `collectionId`, `title`, `text`, optional `parentDocumentId`, `publish` | write |
+| `update_document` | `id`, at least one of `title`, `text`, `publish`; optional `editMode`, `lastRevision` | write |
 | `delete_document` | `id`, `confirmDelete: true` | write |
-| `create_document` | `collectionId`, `title`, `text`; optional `parentDocumentId`, `publish` | write |
 
-Pagination defaults to 25 results at offset 0; maximum page size is 100. Results
-retain the API `data` and `pagination` under the action result's `data` property.
-The document text is Markdown. Creation defaults to `publish: false` (draft).
-Updates accept optional `title`, `text`, `publish`, `editMode` (replace/append/prepend),
-and `lastRevision` for optimistic concurrency on supporting Outline versions.
-An empty `text` intentionally clears content. Omitted fields stay unchanged.
-Deletion requires `confirmDelete: true` and moves the document to trash; the
-plugin does not expose irreversible permanent deletion.
-Use the collection listing to obtain a destination ID, then pass it to creation.
-Calls honor host cancellation/deadlines and have a maximum 30-second timeout.
-HTTP failures return `ok: false`; rate limits include `retryAfter`. There are no
-automatic retries: a timed-out creation can have succeeded remotely, so check
-Outline before retrying. Document content and credentials are never logged.
+Creation uses Markdown and defaults to an unpublished draft. Example:
+`{"collectionId":"YOUR_COLLECTION_UUID","title":"Incident review","text":"# Summary\n\nFindings and resolution.","publish":false}`.
+Use collection listing to find the destination. Updates preserve omitted fields;
+empty `text` clears content. `editMode` supports replace/append/prepend.
+`lastRevision` provides optimistic concurrency on supporting Outline versions.
+Deletion moves a document to trash; permanent deletion is not exposed.
 
-Example creation input (credentials are supplied separately through host auth):
+Pagination defaults to 25 results at offset 0, with a maximum page size of 100.
+Provider results contain `data` and `pagination`. Requests honor cancellation and
+deadlines, with a maximum 30-second timeout. HTTP errors return `ok: false`;
+429 results include `retryAfter`. No mutation retries are automatic. A timeout
+may follow a successful remote creation; reconcile before retrying.
 
-```json
-{
-  "collectionId": "YOUR_COLLECTION_UUID",
-  "title": "Incident review",
-  "text": "# Summary\n\nInvestigation findings and remediation steps.",
-  "publish": false
-}
-```
+Check the key's endpoint scopes, collection access, destination allowlist, and
+HTTP status when debugging. No credentials or document bodies are logged by the
+plugin. Comments, attachments, OAuth acquisition, and webhook subscriptions are
+outside this document plugin's scope.
 
-## API research
-
-Outline is a collaborative knowledge base with collections, Markdown documents,
-permissions, revision history, and search. Its API also covers comments, users,
-groups, shares, attachments, imports/exports, and webhook subscriptions. API keys
-and OAuth tokens use bearer authentication. Grant only the endpoint scopes needed
-by the chosen actions. This plugin implements seven document/collection actions;
-OAuth acquisition, attachments, and webhooks are outside this first version.
-See the [official API reference](https://www.getoutline.com/developers) and
+See the [official Outline API](https://www.getoutline.com/developers) and
 [OpenAPI specification](https://github.com/outline/openapi).
-
-Outline's application is currently source-available under BSL 1.1, not an
-OSI open-source license; its API specification has a separate BSD license.
-See the [application license](https://github.com/outline/outline/blob/main/LICENSE).
-
-The companion iTop plugin is maintained in
-[bitsentry-plugin-itop](https://github.com/bitsentry-ai/bitsentry-plugin-itop).
-Dashboard webhook receivers belong to the BitSentry monorepo, not this plugin.
-
-No live Outline instance was supplied. Build/type validation does not establish
-connectivity, account permissions, or compatibility with a client's older release.
+Build validation confirms the SDK contract, not connectivity or permissions on a
+particular Outline installation.

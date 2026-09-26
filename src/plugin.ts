@@ -192,7 +192,7 @@ function action(
 export const plugin: DesktopCodePlugin = {
   id: "outline",
   name: "Outline",
-  version: "0.2.0",
+  version: "0.2.1",
   type: "data_source",
   description: "Search Outline knowledge and create, read, update, and delete Markdown documents.",
   auth: {
