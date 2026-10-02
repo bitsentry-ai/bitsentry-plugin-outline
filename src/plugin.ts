@@ -1,13 +1,29 @@
 import type {
-  DesktopCodePlugin,
+  DesktopCodePlugin as SdkCodePlugin,
   DesktopCodePluginAction,
   DesktopPluginCodeActionContext as SdkActionContext,
   DesktopPluginFieldDefinition,
 } from "@bitsentry/plugin-sdk";
 
+// Additive persistence contract while the new SDK release is pending. New hosts
+// validate this descriptor and handlers against their canonical SDK schemas.
+type DesktopCodePlugin = Omit<SdkCodePlugin, "metadata"> & {
+  metadata: SdkCodePlugin["metadata"] & { persistence: {
+    configVersion: number; destinationField: string;
+    configFields: DesktopPluginFieldDefinition[];
+    resources: Array<{ type: string; stateVersion: number; readActionId: string }>;
+    eventChannels: string[];
+  } };
+  persistence: {
+    validateConfig(config: Record<string, unknown>): Record<string, unknown>;
+    validateResourceState(input: { resourceType: string; version: number; state: unknown }): unknown;
+  };
+};
+
 // SDK 0.1.0 predates the optional operation context supplied by newer hosts.
 // Keep the standalone package compatible with both host generations.
 type DesktopPluginCodeActionContext = SdkActionContext & {
+  config?: Record<string, unknown>;
   operation?: {
     signal?: AbortSignal;
     deadlineAt?: number;
@@ -124,7 +140,7 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 async function request(context: DesktopPluginCodeActionContext, method: string) {
-  const base = authorizedBase(context.auth.apiBase);
+  const base = authorizedBase(context.config?.endpoint ?? context.auth.apiBase);
   const token = stringValue(context.auth.accessToken, "accessToken").trim();
   const body = parameters(context, method);
   const deadline = context.operation?.deadlineAt ?? Date.now() + 30_000;
@@ -190,6 +206,24 @@ function action(
 }
 
 export const plugin: DesktopCodePlugin = {
+  metadata: { persistence: {
+    configVersion: 1,
+    destinationField: "endpoint",
+    configFields: [
+      { key: "endpoint", label: "Instance URL", type: "string", required: true },
+    ],
+    resources: [{ type: "document", stateVersion: 1, readActionId: "get_document" }],
+    eventChannels: [],
+  } },
+  persistence: {
+    validateConfig(config) {
+      return { ...config, endpoint: apiBase(config.endpoint) };
+    },
+    validateResourceState({ state }) {
+      if (state === null || typeof state !== "object" || Array.isArray(state)) throw new Error("Resource state must be an object");
+      return state;
+    },
+  },
   id: "outline",
   name: "Outline",
   version: "0.2.1",
