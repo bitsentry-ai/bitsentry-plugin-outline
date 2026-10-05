@@ -1,6 +1,6 @@
 {
   "name": "@bitsentry/plugin-outline",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "Outline document CRUD and knowledge search for BitSentry Desktop and Dashboard",
   "main": "./dist/plugin.js",
